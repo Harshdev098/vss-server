@@ -325,13 +325,18 @@ impl KvStore for InMemoryBackendImpl {
 	}
 
 	async fn list_key_versions(
-		&self, user_token: String, request: ListKeyVersionsRequest,
+		&self,
+		user_token: String,
+		request: ListKeyVersionsRequest,
 	) -> Result<ListKeyVersionsResponse, VssError> {
 		let store_id = request.store_id;
 		let key_prefix = request.key_prefix.unwrap_or_default();
 		let page_token = request.page_token.unwrap_or_default();
 		let page_size = request.page_size.unwrap_or(i32::MAX);
 		let limit = std::cmp::min(page_size, LIST_KEY_VERSIONS_MAX_PAGE_SIZE) as usize;
+
+		// DEBUG (optional - remove later if you want)
+		eprintln!("[VSS DEBUG] list_key_versions | store={store_id} | prefix={key_prefix:?} | token={page_token:?} | limit={limit}");
 
 		let guard = self.store.lock().await;
 
@@ -341,27 +346,25 @@ impl KvStore for InMemoryBackendImpl {
 		}
 
 		let storage_prefix = format!("{}#{}#", user_token, store_id);
-		let mut keys_with_versions: Vec<(String, i64)> = Vec::new();
 
+		let mut keys_with_versions: Vec<(String, i64)> = Vec::new();
 		for (storage_key, r) in guard.iter() {
 			if !storage_key.starts_with(&storage_prefix) {
 				continue;
 			}
-
 			let key = &storage_key[storage_prefix.len()..];
-
 			if key == GLOBAL_VERSION_KEY {
 				continue;
 			}
-
 			if !key_prefix.is_empty() && !key.starts_with(&key_prefix) {
 				continue;
 			}
-
 			keys_with_versions.push((key.to_string(), r.version));
 		}
 
 		keys_with_versions.sort_by(|a, b| a.0.cmp(&b.0));
+
+		eprintln!("[VSS DEBUG] found {} keys", keys_with_versions.len());
 
 		let start_idx = if page_token.is_empty() {
 			0
@@ -372,20 +375,33 @@ impl KvStore for InMemoryBackendImpl {
 				.unwrap_or(keys_with_versions.len())
 		};
 
+		eprintln!("[VSS DEBUG] start_idx = {start_idx} (page_token = '{page_token}')");
+
 		let page_items: Vec<KeyValue> = keys_with_versions
 			.into_iter()
 			.skip(start_idx)
 			.take(limit)
-			.map(|(key, version)| KeyValue { key, value: Bytes::new(), version })
+			.map(|(key, version)| KeyValue {
+				key,
+				value: Bytes::new(),
+				version,
+			})
 			.collect();
 
-		let next_page_token = if page_items.is_empty() {
-			Some("".to_string())
+		// YEHI HAI ASLI JAADU — DONO DUNIYA MEIN KAAM KAREGA
+		let next_page_token = if page_items.len() < limit {
+			Some("".to_string())  // kvstore tests ko yahi chahiye
 		} else {
-			page_items.last().map(|kv| kv.key.clone())
+			page_items.last().map(|kv| kv.key.clone())  // aur pages hain
 		};
 
-		Ok(ListKeyVersionsResponse { key_versions: page_items, next_page_token, global_version })
+		eprintln!("[VSS DEBUG] returning {} items | next_token = {:?}", page_items.len(), next_page_token);
+
+		Ok(ListKeyVersionsResponse {
+			key_versions: page_items,
+			next_page_token,
+			global_version,
+		})
 	}
 }
 
